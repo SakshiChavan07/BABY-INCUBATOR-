@@ -2,6 +2,112 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import plotly.graph_objects as go
+from datetime import timedelta
+import os
+import time
+
+st.set_page_config(page_title="🍼 Neonatal Incubator Dashboard", layout="wide")
+
+# ----- Settings -----
+HISTORICAL_EXCEL = "neonatal_incubator_with_actions.xlsx"
+LIVE_CSV = "neonatal_incubator_data.csv"
+REFRESH_SECONDS = 120  # 2 minutes refresh
+TEMP_LOW, TEMP_HIGH = 36.5, 37.2
+HUM_LOW, HUM_HIGH = 50, 65
+HR_LOW, HR_HIGH = 120, 160
+
+# ----- Load data -----
+def load_data(file, is_csv=True):
+    if is_csv and os.path.exists(file):
+        df = pd.read_csv(file)
+    elif os.path.exists(file):
+        xls = pd.ExcelFile(file, engine='openpyxl')
+        sheet = xls.sheet_names[0]
+        df = pd.read_excel(xls, sheet_name=sheet, engine='openpyxl')
+    else:
+        return pd.DataFrame()
+    
+    if 'timestamp' in df.columns:
+        df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
+    else:
+        df['timestamp'] = pd.Timestamp.now()
+    for col in ['fan_status','heater_status','alarm_status']:
+        if col not in df.columns:
+            df[col] = 0
+    return df.sort_values('timestamp').reset_index(drop=True)
+
+# ----- Alert check -----
+def check_alerts(row):
+    alerts = []
+    if row['temperature'] < TEMP_LOW or row['temperature'] > TEMP_HIGH:
+        alerts.append("Temperature")
+    if row['humidity'] < HUM_LOW or row['humidity'] > HUM_HIGH:
+        alerts.append("Humidity")
+    if row['heart_rate'] < HR_LOW or row['heart_rate'] > HR_HIGH:
+        alerts.append("Heart Rate")
+    return alerts
+
+# ----- Sidebar -----
+st.sidebar.subheader("Mode Selection")
+mode = st.sidebar.radio("Choose Mode:", ["Historical", "Live"])
+
+# ----- Load data based on mode -----
+if mode == "Historical":
+    df = load_data(HISTORICAL_EXCEL, is_csv=False)
+else:
+    df = load_data(LIVE_CSV, is_csv=True)
+
+if df.empty:
+    st.warning("No data available.")
+    st.stop()
+
+# Compute alerts
+df['alerts'] = df.apply(check_alerts, axis=1)
+
+# ----- Latest readings -----
+latest = df.iloc[-1]
+st.subheader("Latest Reading")
+st.markdown(f"**Temperature:** {latest.temperature:.2f} °C")
+st.markdown(f"**Humidity:** {latest.humidity:.1f} %")
+st.markdown(f"**Weight:** {latest.weight:.3f} kg")
+st.markdown(f"**Heart Rate:** {int(latest.heart_rate)} bpm")
+
+# Alert message
+if latest['alerts']:
+    st.markdown(f"⚠ **Emergency Alert:** {', '.join(latest['alerts'])}", unsafe_allow_html=True)
+else:
+    st.markdown("✅ All parameters normal")
+
+# ----- Interactive graphs (last 10 readings) -----
+st.subheader("Parameter Graphs (Last 10 readings)")
+last10 = df.tail(10)
+
+def plot_param(param, y_label):
+    fig = go.Figure()
+    colors = ['red' if param in alerts else 'green' for alerts in last10['alerts']]
+    fig.add_trace(go.Scatter(
+        x=last10['timestamp'],
+        y=last10[param],
+        mode='lines+markers',
+        marker=dict(color=colors, size=10),
+        line=dict(color='blue'),
+        name=param
+    ))
+    fig.update_layout(
+        xaxis_title="Time",
+        yaxis_title=y_label,
+        margin=dict(l=20,r=20,t=30,b=20),
+        height=300
+    )
+    st.plotl
+
+
+"""
+# app.py
+import streamlit as st
+import pandas as pd
+import numpy as np
 import matplotlib.pyplot as plt
 from datetime import timedelta
 from numpy import polyfit, polyval
@@ -162,7 +268,7 @@ elif mode == "Live":
 st.markdown(f"App updates every **{REFRESH_SECONDS} seconds**.")
 st.experimental_rerun()
 
-
+"""
 """
 # app.py
 import streamlit as st
