@@ -4,5 +4,6 @@ matplotlib
 scikit-learn
 streamlit
 pyserial
-pip install pandas numpy matplotlib scikit-learn streamlit
-pip install pyserial
+
+
+
