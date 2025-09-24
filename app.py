@@ -1,3 +1,151 @@
+# app.py
+import streamlit as st
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from datetime import timedelta
+from numpy import polyfit, polyval
+import os
+import time
+
+st.set_page_config(page_title="🍼 Neonatal Incubator Dashboard", layout="wide")
+
+# ----- Settings -----
+LIVE_CSV = "neonatal_live.csv"
+HISTORICAL_EXCEL = "neonatal_incubator_with_actions.xlsx"
+REFRESH_SECONDS = 120  # auto-refresh every 2 minutes
+PREDICT_MINUTES = 10  # predict next N minutes
+
+# Thresholds
+TEMP_LOW, TEMP_HIGH = 36.5, 37.2
+HUM_LOW, HUM_HIGH = 50, 65
+HR_LOW, HR_HIGH = 120, 160
+
+# ----- Page Header -----
+st.title("🍼 Neonatal Baby Incubator Dashboard")
+st.markdown(f"Auto-refresh every **{REFRESH_SECONDS} seconds**.")
+
+# ----- Mode selection -----
+mode = st.sidebar.radio("Mode:", ["Historical Analysis", "Live / Simulation"])
+
+# ----- Helper functions -----
+def check_alerts(row):
+    alerts = []
+    if row['temperature'] < TEMP_LOW or row['temperature'] > TEMP_HIGH:
+        alerts.append("Temperature")
+    if row['humidity'] < HUM_LOW or row['humidity'] > HUM_HIGH:
+        alerts.append("Humidity")
+    if row['heart_rate'] < HR_LOW or row['heart_rate'] > HR_HIGH:
+        alerts.append("Heart Rate")
+    return alerts
+
+def load_historical():
+    if not os.path.exists(HISTORICAL_EXCEL):
+        st.error(f"Historical data not found: {HISTORICAL_EXCEL}")
+        return None
+    df = pd.read_excel(HISTORICAL_EXCEL, sheet_name='readings', engine='openpyxl')
+    df['timestamp'] = pd.to_datetime(df['timestamp'])
+    df = df.sort_values('timestamp').reset_index(drop=True)
+    df['alerts'] = df.apply(check_alerts, axis=1)
+    return df
+
+def load_live():
+    if os.path.exists(LIVE_CSV):
+        df = pd.read_csv(LIVE_CSV)
+        df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
+    else:
+        st.info("Live CSV not found, using last historical data fallback.")
+        df = load_historical()
+    if df is None:
+        st.stop()
+    df['alerts'] = df.apply(check_alerts, axis=1)
+    return df
+
+# ----- Main Logic -----
+if mode == "Historical Analysis":
+    st.subheader("📊 Historical Data")
+    df = load_historical()
+elif mode == "Live / Simulation":
+    st.subheader("⏱ Live Data / Simulation")
+    df = load_live()
+
+# ----- Latest readings & device actions -----
+latest = df.iloc[-1]
+st.subheader("Latest Reading")
+st.metric("Temperature (°C)", f"{latest.temperature:.2f}")
+st.metric("Humidity (%)", f"{latest.humidity:.1f}")
+st.metric("Weight (kg)", f"{latest.weight:.3f}")
+st.metric("Heart Rate (bpm)", f"{int(latest.heart_rate)}")
+
+st.subheader("Device Actions (Latest)")
+cols = st.columns(3)
+cols[0].markdown(f"**Fan**: {'🔴 ON' if int(latest.get('fan_status',0)) else '🟢 OFF'}")
+cols[1].markdown(f"**Heater**: {'🔴 ON' if int(latest.get('heater_status',0)) else '🟢 OFF'}")
+cols[2].markdown(f"**Alarm**: {'🔴 ACTIVE' if int(latest.get('alarm_status',0)) else '🟢 OK'}")
+
+# ----- Individual Graphs -----
+st.subheader("Parameter Graphs (Zoomable)")
+params = ['temperature','humidity','heart_rate','weight']
+for param in params:
+    fig, ax = plt.subplots(figsize=(12,4))
+    ax.plot(df['timestamp'], df[param], marker='o', color='blue', label=param.capitalize())
+    # highlight alerts
+    for i, row in df.iterrows():
+        if param.lower() in [a.lower() for a in row['alerts']]:
+            ax.plot(row['timestamp'], row[param], marker='o', color='red', markersize=8)
+    ax.set_xlabel("Time")
+    ax.set_ylabel(param.capitalize())
+    ax.grid(True)
+    st.pyplot(fig)
+
+# ----- Alerts Table -----
+st.subheader("Recent Alerts")
+alerts_df = df[df['alerts'].map(len) > 0]
+if not alerts_df.empty:
+    alerts_df['alerts_text'] = alerts_df['alerts'].apply(lambda x: ", ".join(x))
+    st.dataframe(alerts_df[['timestamp','temperature','humidity','heart_rate','alerts_text']].tail(20))
+    # Show emergency warning for latest alerts
+    latest_alerts = alerts_df.iloc[-1]['alerts'] if not alerts_df.empty else []
+    if latest_alerts:
+        st.warning(f"⚠ Emergency Alert: {', '.join(latest_alerts)} at {alerts_df.iloc[-1]['timestamp']}")
+else:
+    st.success("✅ All parameters normal")
+
+# ----- Simple Forecast -----
+st.subheader("Forecast (Next Minutes)")
+if 'time_idx' not in df.columns:
+    df['time_idx'] = np.arange(len(df))
+X = df['time_idx'].values
+if len(X) >= 5:
+    # Weight
+    wcoef = polyfit(X, df['weight'].values, 1)
+    future_idx = np.arange(X[-1]+1, X[-1]+1+PREDICT_MINUTES)
+    pred_weight = polyval(wcoef, future_idx)
+    # Heart Rate
+    hrcoef = polyfit(X, df['heart_rate'].values, 1)
+    pred_hr = polyval(hrcoef, future_idx)
+    future_timestamps = [df['timestamp'].iloc[-1] + timedelta(minutes=i+1) for i in range(PREDICT_MINUTES)]
+    pred_df = pd.DataFrame({
+        'timestamp': future_timestamps,
+        'predicted_weight': np.round(pred_weight,3),
+        'predicted_heart_rate': np.round(pred_hr,1)
+    })
+    st.dataframe(pred_df)
+else:
+    st.info("Not enough points to predict (need >=5 readings).")
+
+# ----- Overall Progress Score -----
+alerts_count = alerts_df.shape[0] if not alerts_df.empty else 0
+progress_score = max(0, 100 - alerts_count*0.5)
+st.subheader("Overall Progress Score")
+st.metric("Progress Score (0-100)", int(progress_score))
+st.markdown("**Note:** This is a demo metric. Always rely on medical staff for decisions.")
+
+# ----- Auto-refresh -----
+st.experimental_rerun()  # refresh every REFRESH_SECONDS
+
+
+"""
 import pandas as pd
 import numpy as np
 import streamlit as st
@@ -144,7 +292,7 @@ elif mode == "Live / Simulation":
         time.sleep(SIMULATION_INTERVAL)
 
 
-
+"""
 """
 import pandas as pd
 import numpy as np
