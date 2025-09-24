@@ -14,10 +14,9 @@ except ImportError:
     ARDUINO_CONNECTED = False
 
 # ---------------- FILE SETTINGS ----------------
-ANALYSIS_FILE = "neonatal_incubator_with_actions.xlsx"  # Historical analysis
-LIVE_FILE = "neonatal_incubator_data.xlsx"              # Live/simulation data
-
-SIMULATION_INTERVAL = 60  # seconds between simulated readings
+ANALYSIS_FILE = "neonatal_incubator_with_actions.xlsx"
+LIVE_FILE = "neonatal_incubator_data.xlsx"
+SIMULATION_INTERVAL = 60  # seconds
 
 # ---------------- THRESHOLDS ----------------
 TEMP_LOW, TEMP_HIGH = 36.5, 37.2
@@ -32,7 +31,7 @@ def load_excel(file):
         st.error(f"Data file not found: {file}")
         return None
     xls = pd.ExcelFile(file)
-    sheet = xls.sheet_names[0]  # First sheet
+    sheet = xls.sheet_names[0]
     df = pd.read_excel(xls, sheet_name=sheet, engine="openpyxl")
     df['timestamp'] = pd.to_datetime(df['timestamp'])
     df = df.sort_values('timestamp').reset_index(drop=True)
@@ -42,93 +41,119 @@ def load_excel(file):
 def check_alert(row):
     alerts = []
     if row['temperature'] < TEMP_LOW or row['temperature'] > TEMP_HIGH:
-        alerts.append("⚠ Temp")
+        alerts.append("Temperature")
     if row['humidity'] < HUM_LOW or row['humidity'] > HUM_HIGH:
-        alerts.append("⚠ Humidity")
+        alerts.append("Humidity")
     if row['heart_rate'] < HR_LOW or row['heart_rate'] > HR_HIGH:
-        alerts.append("⚠ Heart Rate")
-    return ", ".join(alerts) if alerts else "All Normal ✅"
+        alerts.append("Heart Rate")
+    return alerts
 
 # ---------------- HISTORICAL DATA ----------------
-st.subheader("📊 Historical Data Analysis")
-df_analysis = load_excel(ANALYSIS_FILE)
-if df_analysis is not None:
-    df_analysis['alerts'] = df_analysis.apply(check_alert, axis=1)
-    
-    # Graphs
-    fig, ax = plt.subplots(figsize=(12,6))
-    ax.plot(df_analysis['timestamp'], df_analysis['temperature'], label='Temperature (°C)', marker='o')
-    ax.plot(df_analysis['timestamp'], df_analysis['humidity'], label='Humidity (%)', marker='o')
-    ax.plot(df_analysis['timestamp'], df_analysis['weight'], label='Weight (kg)', marker='o')
-    ax.plot(df_analysis['timestamp'], df_analysis['heart_rate'], label='Heart Rate (bpm)', marker='o')
-    ax.set_xlabel("Time")
-    ax.set_ylabel("Values")
-    ax.legend()
-    ax.grid(True)
-    st.pyplot(fig)
+st.sidebar.subheader("Mode Selection")
+mode = st.sidebar.radio("Select Mode:", ["Historical Analysis", "Live / Simulation"])
 
-    # Alerts Table
-    st.dataframe(df_analysis[['timestamp','temperature','humidity','heart_rate','alerts']])
+if mode == "Historical Analysis":
+    st.subheader("📊 Historical Data Analysis")
+    df_analysis = load_excel(ANALYSIS_FILE)
+    if df_analysis is not None:
+        df_analysis['alerts'] = df_analysis.apply(check_alert, axis=1)
+        
+        # Individual Graphs
+        parameters = ['temperature','humidity','weight','heart_rate']
+        for param in parameters:
+            st.write(f"### {param.capitalize()} Trend")
+            fig, ax = plt.subplots(figsize=(12,4))
+            ax.plot(df_analysis['timestamp'], df_analysis[param], marker='o', color='blue')
+            # Highlight alerts
+            for i, row in df_analysis.iterrows():
+                if param in row['alerts']:
+                    ax.plot(row['timestamp'], row[param], marker='o', color='red', markersize=8)
+            ax.set_xlabel("Time")
+            ax.set_ylabel(param.capitalize())
+            ax.grid(True)
+            st.pyplot(fig)
 
-    # Weight prediction
-    df_analysis['time_idx'] = np.arange(len(df_analysis))
-    X = df_analysis[['time_idx']]
-    y = df_analysis['weight']
-    model = LinearRegression()
-    model.fit(X, y)
-    future_idx = np.arange(len(df_analysis), len(df_analysis)+3).reshape(-1,1)
-    pred_weight = model.predict(future_idx)
-    st.subheader("📈 Predicted Weight for Next 3 Time Points")
-    st.write(pred_weight)
+        # Show alerts table
+        st.subheader("Alerts Table")
+        df_analysis['alerts_text'] = df_analysis['alerts'].apply(lambda x: ", ".join(x) if x else "Normal ✅")
+        st.dataframe(df_analysis[['timestamp','temperature','humidity','heart_rate','weight','alerts_text']])
 
-# ---------------- LIVE DATA / SIMULATION ----------------
-st.subheader("⏱ Live Data / Simulation")
-df_live = load_excel(LIVE_FILE)
-if df_live is None:
-    df_live = pd.DataFrame(columns=['timestamp','temperature','humidity','weight','heart_rate','alerts'])
+        # Weight Prediction
+        df_analysis['time_idx'] = np.arange(len(df_analysis))
+        X = df_analysis[['time_idx']]
+        y = df_analysis['weight']
+        model = LinearRegression()
+        model.fit(X, y)
+        future_idx = np.arange(len(df_analysis), len(df_analysis)+3).reshape(-1,1)
+        pred_weight = model.predict(future_idx)
+        st.subheader("📈 Predicted Weight for Next 3 Time Points")
+        st.write(pred_weight)
 
-live_slot = st.empty()
+# ---------------- LIVE / SIMULATION ----------------
+elif mode == "Live / Simulation":
+    st.subheader("⏱ Live Data / Simulation")
+    df_live = load_excel(LIVE_FILE)
+    if df_live is None:
+        df_live = pd.DataFrame(columns=['timestamp','temperature','humidity','weight','heart_rate','alerts'])
 
-if ARDUINO_CONNECTED:
-    st.info("Arduino detected! Reading live data...")
-    # Replace 'COM3' with your Arduino port
-    ser = serial.Serial('COM3', 9600, timeout=1)
-    while True:
-        line = ser.readline().decode().strip()
-        if line:
-            temp, hum, weight, hr = map(float, line.split(","))
-            new_time = pd.Timestamp.now()
-            new_row = {
-                "timestamp": new_time,
-                "temperature": temp,
-                "humidity": hum,
-                "weight": weight,
-                "heart_rate": hr,
-                "alerts": check_alert({"temperature":temp,"humidity":hum,"heart_rate":hr})
-            }
-            df_live = pd.concat([df_live, pd.DataFrame([new_row])], ignore_index=True)
-            live_slot.write(df_live.tail(5))
-        time.sleep(60)
-else:
-    st.info("Arduino not detected. Simulating live data every 1 min...")
-    for i in range(3):  # simulate 3 new readings
-        if df_live.empty:
-            last_time = pd.Timestamp.now()
-            last_weight = 3.0
-        else:
-            last = df_live.iloc[-1]
-            last_time = last['timestamp']
-            last_weight = last['weight']
+    live_slot = st.empty()
+    chart_slots = {
+        'temperature': st.empty(),
+        'humidity': st.empty(),
+        'weight': st.empty(),
+        'heart_rate': st.empty()
+    }
 
-        new_time = last_time + pd.Timedelta(seconds=SIMULATION_INTERVAL)
+    def add_new_row(temp, hum, weight, hr):
+        new_time = pd.Timestamp.now()
         new_row = {
             "timestamp": new_time,
-            "temperature": np.random.uniform(36.2,37.5),
-            "humidity": np.random.uniform(48,67),
-            "weight": last_weight + np.random.uniform(0,0.02),
-            "heart_rate": np.random.randint(115,165),
+            "temperature": temp,
+            "humidity": hum,
+            "weight": weight,
+            "heart_rate": hr,
+            "alerts": check_alert({"temperature":temp,"humidity":hum,"heart_rate":hr})
         }
-        new_row['alerts'] = check_alert(new_row)
-        df_live = pd.concat([df_live, pd.DataFrame([new_row])], ignore_index=True)
-        live_slot.write(df_live.tail(5))
+        return pd.DataFrame([new_row])
+
+    # Simulate live readings every 1 min
+    for i in range(3):  # 3 simulated readings for demonstration
+        if df_live.empty:
+            last_weight = 3.0
+        else:
+            last_weight = df_live.iloc[-1]['weight']
+
+        # Generate simulated data
+        temp = np.random.uniform(36.2,37.5)
+        hum = np.random.uniform(48,67)
+        weight = last_weight + np.random.uniform(0,0.02)
+        hr = np.random.randint(115,165)
+
+        new_df = add_new_row(temp, hum, weight, hr)
+        df_live = pd.concat([df_live, new_df], ignore_index=True)
+
+        # Update charts individually
+        for param in ['temperature','humidity','weight','heart_rate']:
+            fig, ax = plt.subplots(figsize=(10,3))
+            ax.plot(df_live['timestamp'], df_live[param], marker='o', color='green')
+            # highlight alerts
+            for j, row in df_live.iterrows():
+                if param in row['alerts']:
+                    ax.plot(row['timestamp'], row[param], marker='o', color='red', markersize=8)
+            ax.set_xlabel("Time")
+            ax.set_ylabel(param.capitalize())
+            ax.grid(True)
+            chart_slots[param].pyplot(fig)
+
+        # Update table
+        df_live['alerts_text'] = df_live['alerts'].apply(lambda x: ", ".join(x) if x else "Normal ✅")
+        live_slot.dataframe(df_live.tail(5))
+
+        # Alert message if emergency
+        latest_alerts = df_live.iloc[-1]['alerts']
+        if latest_alerts:
+            st.warning(f"⚠ Emergency Alert: {', '.join(latest_alerts)} at {df_live.iloc[-1]['timestamp']}")
+        else:
+            st.success("✅ All parameters normal")
+
         time.sleep(SIMULATION_INTERVAL)
