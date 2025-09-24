@@ -9,13 +9,14 @@ import os
 # ---------------- FILE SETTINGS ----------------
 HISTORICAL_FILE = "neonatal_incubator_with_actions.xlsx"
 LIVE_FILE = "neonatal_incubator_data.xlsx"
-SIMULATION_INTERVAL = 60  # seconds for live simulation
+SIMULATION_INTERVAL = 120  # seconds (2 minutes refresh)
 
 # ---------------- THRESHOLDS ----------------
 TEMP_LOW, TEMP_HIGH = 36.5, 37.2
 HUM_LOW, HUM_HIGH = 50, 65
 HR_LOW, HR_HIGH = 120, 160
 
+st.set_page_config(page_title="Neonatal Incubator Dashboard", layout="wide")
 st.title("🍼 Neonatal Baby Incubator Dashboard")
 
 # ---------------- LOAD DATA ----------------
@@ -102,14 +103,15 @@ elif mode == "Live / Simulation":
         }])
         return new_row
 
-    st.info("Simulating live data. App refreshes every minute automatically.")
+    st.info("Simulating live data. App refreshes every 2 minutes automatically.")
 
-    for i in range(3):  # simulate 3 live readings
+    while True:  # continuously refresh every 2 min
         if df_live.empty:
             last_weight = 3.0
         else:
             last_weight = df_live.iloc[-1]['weight']
 
+        # Generate simulated live data
         temp = np.random.uniform(36.2, 37.5)
         hum = np.random.uniform(48, 67)
         weight = last_weight + np.random.uniform(0, 0.02)
