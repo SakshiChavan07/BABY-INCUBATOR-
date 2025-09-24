@@ -11,6 +11,172 @@ import time
 st.set_page_config(page_title="🍼 Neonatal Incubator Dashboard", layout="wide")
 
 # ----- Settings -----
+HISTORICAL_EXCEL = "neonatal_incubator_with_actions.xlsx"
+LIVE_CSV = "neonatal_incubator_data.csv"  # from Arduino/ESP32
+REFRESH_SECONDS = 120  # refresh every 2 minutes
+PREDICT_MINUTES = 10
+
+# Thresholds
+TEMP_LOW, TEMP_HIGH = 36.5, 37.2
+HUM_LOW, HUM_HIGH = 50, 65
+HR_LOW, HR_HIGH = 120, 160
+
+# ----- Load historical data -----
+def load_historical():
+    if not os.path.exists(HISTORICAL_EXCEL):
+        st.warning("Historical Excel file not found.")
+        return pd.DataFrame()
+    xls = pd.ExcelFile(HISTORICAL_EXCEL, engine='openpyxl')
+    sheet = xls.sheet_names[0]  # automatically take first sheet
+    df = pd.read_excel(xls, sheet_name=sheet, engine='openpyxl')
+    if 'timestamp' in df.columns:
+        df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
+    else:
+        df['timestamp'] = pd.Timestamp.now()
+    return df.sort_values('timestamp').reset_index(drop=True)
+
+# ----- Load live data -----
+def load_live():
+    if os.path.exists(LIVE_CSV):
+        df = pd.read_csv(LIVE_CSV)
+        if 'timestamp' in df.columns:
+            df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
+        else:
+            df['timestamp'] = pd.Timestamp.now()
+        for col in ['fan_status','heater_status','alarm_status']:
+            if col not in df.columns:
+                df[col] = 0
+        return df.sort_values('timestamp').reset_index(drop=True)
+    else:
+        return pd.DataFrame()
+
+# ----- Alert function -----
+def check_alerts(row):
+    alerts = []
+    if row['temperature'] < TEMP_LOW or row['temperature'] > TEMP_HIGH:
+        alerts.append("Temperature")
+    if row['humidity'] < HUM_LOW or row['humidity'] > HUM_HIGH:
+        alerts.append("Humidity")
+    if row['heart_rate'] < HR_LOW or row['heart_rate'] > HR_HIGH:
+        alerts.append("Heart Rate")
+    return alerts
+
+# ----- Sidebar mode selection -----
+st.sidebar.subheader("Mode Selection")
+mode = st.sidebar.radio("Choose mode:", ["Historical", "Live"])
+
+if mode == "Historical":
+    st.subheader("📊 Historical Data Analysis")
+    df_hist = load_historical()
+    if df_hist.empty:
+        st.warning("No historical data available.")
+        st.stop()
+
+    # Compute alerts
+    df_hist['alerts'] = df_hist.apply(check_alerts, axis=1)
+    df_hist['alerts_text'] = df_hist['alerts'].apply(lambda x: ", ".join(x) if x else "Normal ✅")
+
+    # Individual graphs
+    for param in ['temperature','humidity','weight','heart_rate']:
+        st.write(f"### {param.capitalize()} Trend")
+        fig, ax = plt.subplots(figsize=(12,4))
+        ax.plot(df_hist['timestamp'], df_hist[param], marker='o', color='blue')
+        for i, row in df_hist.iterrows():
+            if param in row['alerts']:
+                ax.plot(row['timestamp'], row[param], marker='o', color='red', markersize=8)
+        ax.set_xlabel("Time")
+        ax.set_ylabel(param.capitalize())
+        ax.grid(True)
+        st.pyplot(fig)
+
+    # Alerts table
+    st.subheader("Alerts Table")
+    st.dataframe(df_hist[['timestamp','temperature','humidity','heart_rate','weight','alerts_text']])
+
+    # Simple prediction (weight and HR)
+    if len(df_hist) >= 5:
+        df_hist['time_idx'] = np.arange(len(df_hist))
+        future_idx = np.arange(df_hist['time_idx'].iloc[-1]+1, df_hist['time_idx'].iloc[-1]+1+PREDICT_MINUTES)
+        pred_weight = polyval(polyfit(df_hist['time_idx'], df_hist['weight'], 1), future_idx)
+        pred_hr = polyval(polyfit(df_hist['time_idx'], df_hist['heart_rate'], 1), future_idx)
+        future_times = [df_hist['timestamp'].iloc[-1] + timedelta(minutes=i+1) for i in range(PREDICT_MINUTES)]
+        pred_df = pd.DataFrame({
+            'timestamp': future_times,
+            'predicted_weight': np.round(pred_weight,3),
+            'predicted_heart_rate': np.round(pred_hr,1)
+        })
+        st.subheader("📈 Simple Forecast (Next Minutes)")
+        st.dataframe(pred_df)
+    else:
+        st.info("Not enough data for prediction (need >=5 readings).")
+
+elif mode == "Live":
+    st.subheader("⏱ Live Data")
+    df_live = load_live()
+    if df_live.empty:
+        st.warning("No live data found. Make sure Arduino/ESP32 is running and CSV is updated.")
+        st.stop()
+
+    # Compute alerts
+    df_live['alerts'] = df_live.apply(check_alerts, axis=1)
+    df_live['alerts_text'] = df_live['alerts'].apply(lambda x: ", ".join(x) if x else "Normal ✅")
+
+    # Latest reading
+    latest = df_live.iloc[-1]
+    st.subheader("Latest Reading")
+    st.metric("Temperature (°C)", f"{latest.temperature:.2f}")
+    st.metric("Humidity (%)", f"{latest.humidity:.1f}")
+    st.metric("Weight (kg)", f"{latest.weight:.3f}")
+    st.metric("Heart Rate (bpm)", f"{int(latest.heart_rate)}")
+
+    # Device actions
+    st.subheader("Device Actions (Latest)")
+    cols = st.columns(3)
+    cols[0].markdown(f"**Fan**: {'🔴 ON' if int(latest.get('fan_status',0))==1 else '🟢 OFF'}")
+    cols[1].markdown(f"**Heater**: {'🔴 ON' if int(latest.get('heater_status',0))==1 else '🟢 OFF'}")
+    cols[2].markdown(f"**Alarm**: {'🔴 ACTIVE' if int(latest.get('alarm_status',0))==1 else '🟢 OK'}")
+
+    # Graphs (last 300 points)
+    st.subheader("Parameter Graphs")
+    to_plot = df_live.set_index('timestamp')[['temperature','humidity','weight','heart_rate']].tail(300)
+    st.line_chart(to_plot['temperature'].rename("Temperature (°C)").to_frame())
+    st.line_chart(to_plot['humidity'].rename("Humidity (%)").to_frame())
+    st.line_chart(to_plot['heart_rate'].rename("Heart Rate (bpm)").to_frame())
+    st.line_chart(to_plot['weight'].rename("Weight (kg)").to_frame())
+
+    # Alerts table (last 20)
+    st.subheader("Recent Alerts")
+    alerts = df_live[(df_live['temperature'] < TEMP_LOW) | (df_live['temperature'] > TEMP_HIGH) |
+                     (df_live['humidity'] < HUM_LOW) | (df_live['humidity'] > HUM_HIGH) |
+                     (df_live['heart_rate'] < HR_LOW) | (df_live['heart_rate'] > HR_HIGH)]
+    st.dataframe(alerts[['timestamp','temperature','humidity','heart_rate']].tail(20))
+
+    # Emergency message
+    latest_alerts = latest['alerts']
+    if latest_alerts:
+        st.error(f"⚠ Emergency Alert: {', '.join(latest_alerts)} at {latest['timestamp']}")
+    else:
+        st.success("✅ All parameters normal")
+
+# Auto-refresh info
+st.markdown(f"App updates every **{REFRESH_SECONDS} seconds**.")
+st.experimental_rerun()
+
+
+"""
+# app.py
+import streamlit as st
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from datetime import timedelta
+from numpy import polyfit, polyval
+import os
+import time
+
+st.set_page_config(page_title="🍼 Neonatal Incubator Dashboard", layout="wide")
+
+# ----- Settings -----
 LIVE_CSV = "neonatal_live.csv"
 HISTORICAL_EXCEL = "neonatal_incubator_with_actions.xlsx"
 REFRESH_SECONDS = 120  # auto-refresh every 2 minutes
@@ -143,7 +309,7 @@ st.markdown("**Note:** This is a demo metric. Always rely on medical staff for d
 
 # ----- Auto-refresh -----
 st.experimental_rerun()  # refresh every REFRESH_SECONDS
-
+"""
 
 """
 import pandas as pd
