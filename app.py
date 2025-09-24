@@ -1,4 +1,4 @@
-# neonatal_dashboard_v2.py
+# neonatal_dashboard_final.py
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -8,22 +8,22 @@ from sklearn.linear_model import LinearRegression
 import os
 import time
 
-# ---------------- Page Config ----------------
-st.set_page_config(page_title="🍼 Neonatal Incubator Dashboard", layout="wide")
-st.title("🍼 Neonatal Baby Incubator Dashboard")
-
 # ---------------- Settings ----------------
-HISTORICAL_FILE = "neonatal_incubator_with_actions.xlsx"
-LIVE_FILE = "neonatal_incubator_data.csv"
-REFRESH_SECONDS = 120  # 2 minutes
-LAST_N = 20  # Last N readings to display
+LIVE_FILE = "neonatal_live.csv"
+REFRESH_SECONDS = 120  # Auto-refresh every 2 minutes
+LAST_N = 20  # Last 20 readings
 
+# Safe thresholds
 TEMP_LOW, TEMP_HIGH = 36.5, 37.2
 HUM_LOW, HUM_HIGH = 50, 65
 HR_LOW, HR_HIGH = 120, 160
 
+# ---------------- Page Config ----------------
+st.set_page_config(page_title="🍼 Neonatal Incubator Dashboard", layout="wide")
+st.title("🍼 Neonatal Baby Incubator Dashboard")
+
 # ---------------- Helper Functions ----------------
-def check_alert(row):
+def check_alerts(row):
     alerts = []
     if row['temperature'] < TEMP_LOW or row['temperature'] > TEMP_HIGH:
         alerts.append("Temperature")
@@ -33,10 +33,104 @@ def check_alert(row):
         alerts.append("Heart Rate")
     return alerts
 
-def load_excel(file):
+def load_data(file):
     if not os.path.exists(file):
         st.warning(f"File not found: {file}")
-        return pd.Dat
+        return pd.DataFrame()
+    df = pd.read_csv(file)
+    df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
+    df = df.sort_values('timestamp').reset_index(drop=True)
+    df['alerts'] = df.apply(check_alerts, axis=1)
+    return df
+
+def predict_next(df, param):
+    X = np.arange(len(df)).reshape(-1,1)
+    y = df[param].values
+    model = LinearRegression()
+    model.fit(X, y)
+    future_idx = np.array([[len(df)], [len(df)+1], [len(df)+2]])
+    pred = model.predict(future_idx)
+    # Check predicted alerts
+    if param=='temperature':
+        limits = (TEMP_LOW, TEMP_HIGH)
+    elif param=='humidity':
+        limits = (HUM_LOW, HUM_HIGH)
+    elif param=='heart_rate':
+        limits = (HR_LOW, HR_HIGH)
+    predicted_alerts = [val for val in pred if val<limits[0] or val>limits[1]]
+    return pred, predicted_alerts
+
+def predict_weight(df):
+    X = np.arange(len(df)).reshape(-1,1)
+    y = df['weight'].values
+    model = LinearRegression()
+    model.fit(X, y)
+    future_idx = np.array([[len(df)], [len(df)+1], [len(df)+2]])
+    pred = model.predict(future_idx)
+    return pred
+
+# ---------------- Load Data ----------------
+df = load_data(LIVE_FILE)
+if df.empty:
+    st.stop()
+
+# ---------------- Latest Reading ----------------
+latest = df.iloc[-1]
+st.subheader("Latest Reading")
+st.markdown(f"**Temperature:** {latest.temperature:.2f} °C")
+st.markdown(f"**Humidity:** {latest.humidity:.1f} %")
+st.markdown(f"**Weight:** {latest.weight:.3f} kg")
+st.markdown(f"**Heart Rate:** {int(latest.heart_rate)} bpm")
+
+# ---------------- Emergency Alerts ----------------
+alerts_text = [f"{a} at {latest['timestamp']}" for a in latest['alerts']]
+if alerts_text:
+    st.markdown(f"<p style='color:red; font-weight:bold;'>⚠ Emergency Alerts: {', '.join(alerts_text)}</p>", unsafe_allow_html=True)
+else:
+    st.success("✅ All parameters normal")
+
+# ---------------- Parameter Graphs ----------------
+st.subheader(f"Parameter Graphs (Last {LAST_N} readings)")
+last_readings = df.tail(LAST_N)
+for param in ['temperature','humidity','weight','heart_rate']:
+    fig = px.line(last_readings, x='timestamp', y=param, markers=True, title=param.capitalize())
+    alert_mask = last_readings['alerts'].apply(lambda x: param in x)
+    if alert_mask.any():
+        fig.add_scatter(
+            x=last_readings['timestamp'][alert_mask],
+            y=last_readings[param][alert_mask],
+            mode='markers',
+            marker=dict(color='red', size=12),
+            name='Alert'
+        )
+    st.plotly_chart(fig, use_container_width=True)
+
+# ---------------- Predictions ----------------
+st.subheader("Predictions for Next Intervals")
+for param in ['temperature','humidity','heart_rate']:
+    pred_vals, pred_alerts = predict_next(last_readings, param)
+    st.write(f"{param.capitalize()} predicted for next 3 intervals: {np.round(pred_vals,2)}")
+    if pred_alerts:
+        st.markdown(f"<p style='color:red;'>⚠ Predicted {param} Alert: {np.round(pred_alerts,2)}</p>", unsafe_allow_html=True)
+
+# Weight growth
+weight_pred = predict_weight(last_readings)
+st.write(f"Predicted Weight for next 3 intervals: {np.round(weight_pred,3)} kg")
+
+# ---------------- Baby Growth Report ----------------
+st.subheader("📋 Baby Growth Report")
+weight_change = last_readings['weight'].iloc[-1] - last_readings['weight'].iloc[0]
+st.write(f"Weight change in last {LAST_N} readings: {weight_change:.3f} kg")
+if weight_change>0:
+    st.success("✅ Baby is gaining weight")
+else:
+    st.warning("⚠ Weight gain is low or negative. Monitor closely.")
+
+# ---------------- Doctor Recommendation ----------------
+st.subheader("💡 Recommendation for Doctor")
+doctor_msgs = []
+if any([predict_next(last_readings, p)[1] for p in ['temperature','humidity','heart_rate']]):
+    doctor_msgs.append("⚠ Predicted parameter(s) m_
 
 
 
