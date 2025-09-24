@@ -1,4 +1,4 @@
-# neonatal_dashboard_final.py
+# neonatal_dashboard_final_fixed.py
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -9,6 +9,7 @@ import os
 import time
 
 # ---------------- Settings ----------------
+HISTORICAL_FILE = "neonatal_incubator_with_actions.xlsx"
 LIVE_FILE = "neonatal_live.csv"
 REFRESH_SECONDS = 120  # Auto-refresh every 2 minutes
 LAST_N = 20  # Last 20 readings
@@ -22,6 +23,10 @@ HR_LOW, HR_HIGH = 120, 160
 st.set_page_config(page_title="🍼 Neonatal Incubator Dashboard", layout="wide")
 st.title("🍼 Neonatal Baby Incubator Dashboard")
 
+# ---------------- Mode Selection ----------------
+mode = st.sidebar.radio("Select Mode:", ["Historical", "Live"])
+st.sidebar.markdown("Choose Historical to see past data or Live to connect Arduino (simulated if not connected).")
+
 # ---------------- Helper Functions ----------------
 def check_alerts(row):
     alerts = []
@@ -33,9 +38,18 @@ def check_alerts(row):
         alerts.append("Heart Rate")
     return alerts
 
-def load_data(file):
+def load_excel(file):
     if not os.path.exists(file):
         st.warning(f"File not found: {file}")
+        return pd.DataFrame()
+    df = pd.read_excel(file, engine="openpyxl")
+    df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
+    df = df.sort_values('timestamp').reset_index(drop=True)
+    df['alerts'] = df.apply(check_alerts, axis=1)
+    return df
+
+def load_csv(file):
+    if not os.path.exists(file):
         return pd.DataFrame()
     df = pd.read_csv(file)
     df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
@@ -57,7 +71,7 @@ def predict_next(df, param):
         limits = (HUM_LOW, HUM_HIGH)
     elif param=='heart_rate':
         limits = (HR_LOW, HR_HIGH)
-    predicted_alerts = [val for val in pred if val<limits[0] or val>limits[1]]
+    predicted_alerts = [val for val in pred if val < limits[0] or val > limits[1]]
     return pred, predicted_alerts
 
 def predict_weight(df):
@@ -70,9 +84,17 @@ def predict_weight(df):
     return pred
 
 # ---------------- Load Data ----------------
-df = load_data(LIVE_FILE)
-if df.empty:
-    st.stop()
+if mode == "Historical":
+    df = load_excel(HISTORICAL_FILE)
+    if df.empty:
+        st.stop()
+else:
+    df = load_csv(LIVE_FILE)
+    if df.empty:
+        st.info("⚠ Please connect Arduino / ESP32 to fetch live data. Currently showing simulated or last saved data.")
+        df = load_excel(HISTORICAL_FILE)
+        if df.empty:
+            st.stop()
 
 # ---------------- Latest Reading ----------------
 latest = df.iloc[-1]
@@ -121,7 +143,7 @@ st.write(f"Predicted Weight for next 3 intervals: {np.round(weight_pred,3)} kg")
 st.subheader("📋 Baby Growth Report")
 weight_change = last_readings['weight'].iloc[-1] - last_readings['weight'].iloc[0]
 st.write(f"Weight change in last {LAST_N} readings: {weight_change:.3f} kg")
-if weight_change>0:
+if weight_change > 0:
     st.success("✅ Baby is gaining weight")
 else:
     st.warning("⚠ Weight gain is low or negative. Monitor closely.")
@@ -130,8 +152,18 @@ else:
 st.subheader("💡 Recommendation for Doctor")
 doctor_msgs = []
 if any([predict_next(last_readings, p)[1] for p in ['temperature','humidity','heart_rate']]):
-    doctor_msgs.append("⚠ Predicted parameter(s) m_
+    doctor_msgs.append("⚠ Predicted parameter(s) may go out of safe range soon. Monitor closely.")
+if weight_change <= 0:
+    doctor_msgs.append("⚠ Weight gain is insufficient. Consider nutritional intervention.")
+if not doctor_msgs:
+    doctor_msgs.append("✅ All parameters within normal limits. Continue regular monitoring.")
+for msg in doctor_msgs:
+    st.markdown(msg)
 
+# ---------------- Auto-refresh ----------------
+st.markdown(f"App auto-refreshes every {REFRESH_SECONDS} seconds.")
+time.sleep(REFRESH_SECONDS)
+st.experimental_rerun()
 
 
 """
