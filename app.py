@@ -1,6 +1,61 @@
 import pandas as pd
 import numpy as np
 import streamlit as st
+import plotly.express as px
+import time
+from sklearn.linear_model import LinearRegression
+import os
+
+# ---------------- FILE SETTINGS ----------------
+ANALYSIS_FILE = "neonatal_incubator_with_actions.xlsx"
+LIVE_FILE = "neonatal_incubator_data.xlsx"
+SIMULATION_INTERVAL = 60  # seconds for live simulation
+
+# ---------------- THRESHOLDS ----------------
+TEMP_LOW, TEMP_HIGH = 36.5, 37.2
+HUM_LOW, HUM_HIGH = 50, 65
+HR_LOW, HR_HIGH = 120, 160
+WEIGHT_LOW, WEIGHT_HIGH = 2.5, 4.0  # typical neonatal weight range
+
+st.title("🍼 Neonatal Baby Incubator Dashboard")
+
+# ---------------- ALERT FUNCTION ----------------
+def check_alert(row):
+    alerts = []
+    if row['temperature'] < TEMP_LOW or row['temperature'] > TEMP_HIGH:
+        alerts.append("Temperature")
+    if row['humidity'] < HUM_LOW or row['humidity'] > HUM_HIGH:
+        alerts.append("Humidity")
+    if row['heart_rate'] < HR_LOW or row['heart_rate'] > HR_HIGH:
+        alerts.append("Heart Rate")
+    if row['weight'] < WEIGHT_LOW or row['weight'] > WEIGHT_HIGH:
+        alerts.append("Weight")
+    return alerts
+
+# ---------------- LOAD DATA ----------------
+def load_excel(file):
+    if not os.path.exists(file):
+        st.error(f"Data file not found: {file}")
+        return None
+    xls = pd.ExcelFile(file)
+    sheet = xls.sheet_names[0]
+    df = pd.read_excel(xls, sheet_name=sheet, engine="openpyxl")
+    df['timestamp'] = pd.to_datetime(df['timestamp'])
+    df = df.sort_values('timestamp').reset_index(drop=True)
+    return df
+
+# ---------------- HISTORICAL ANALYSIS ----------------
+st.sidebar.subheader("Mode Selection")
+mode = st.sidebar.radio("Select Mode:", ["Historical Analysis", "Live / Simulation"])
+
+if mode == "Historical Analysis":
+    df_analysis = load_excel(ANALYSIS
+
+
+"""
+import pandas as pd
+import numpy as np
+import streamlit as st
 import matplotlib.pyplot as plt
 from sklearn.linear_model import LinearRegression
 import time
@@ -157,3 +212,4 @@ elif mode == "Live / Simulation":
             st.success("✅ All parameters normal")
 
         time.sleep(SIMULATION_INTERVAL)
+        """
