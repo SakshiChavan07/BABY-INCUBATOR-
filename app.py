@@ -1,19 +1,23 @@
-# neonatal_dashboard.py
+# neonatal_dashboard_v2.py
 import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
 from datetime import timedelta
+from sklearn.linear_model import LinearRegression
 import os
 import time
 
-# Page config
+# ---------------- Page Config ----------------
 st.set_page_config(page_title="🍼 Neonatal Incubator Dashboard", layout="wide")
+st.title("🍼 Neonatal Baby Incubator Dashboard")
 
 # ---------------- Settings ----------------
 HISTORICAL_FILE = "neonatal_incubator_with_actions.xlsx"
 LIVE_FILE = "neonatal_incubator_data.csv"
 REFRESH_SECONDS = 120  # 2 minutes
+LAST_N = 20  # Last N readings to display
+
 TEMP_LOW, TEMP_HIGH = 36.5, 37.2
 HUM_LOW, HUM_HIGH = 50, 65
 HR_LOW, HR_HIGH = 120, 160
@@ -32,74 +36,7 @@ def check_alert(row):
 def load_excel(file):
     if not os.path.exists(file):
         st.warning(f"File not found: {file}")
-        return pd.DataFrame()
-    df = pd.read_excel(file, engine="openpyxl")
-    df['timestamp'] = pd.to_datetime(df['timestamp'])
-    df = df.sort_values('timestamp').reset_index(drop=True)
-    df['alerts'] = df.apply(check_alert, axis=1)
-    return df
-
-def load_csv(file):
-    if not os.path.exists(file):
-        st.warning(f"Live CSV not found: {file}")
-        return pd.DataFrame()
-    df = pd.read_csv(file)
-    df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
-    df = df.sort_values('timestamp').reset_index(drop=True)
-    df['alerts'] = df.apply(check_alert, axis=1)
-    return df
-
-# ---------------- Mode Selection ----------------
-mode = st.sidebar.radio("Select Mode:", ["Historical Analysis", "Live / Simulation"])
-
-# ---------------- Load Data ----------------
-if mode == "Historical Analysis":
-    st.subheader("📊 Historical Data")
-    df = load_excel(HISTORICAL_FILE)
-else:
-    st.subheader("⏱ Live Data / Simulation")
-    df = load_csv(LIVE_FILE)
-
-if df.empty:
-    st.warning("No data available.")
-    st.stop()
-
-# ---------------- Latest Reading ----------------
-latest = df.iloc[-1]
-st.subheader("Latest Reading")
-st.markdown(f"**Temperature:** {latest.temperature:.2f} °C")
-st.markdown(f"**Humidity:** {latest.humidity:.1f} %")
-st.markdown(f"**Weight:** {latest.weight:.3f} kg")
-st.markdown(f"**Heart Rate:** {int(latest.heart_rate)} bpm")
-
-# Emergency alert
-if latest['alerts']:
-    st.markdown(f"<p style='color:red; font-weight:bold;'>⚠ Emergency Alert: {', '.join(latest['alerts'])}</p>", unsafe_allow_html=True)
-else:
-    st.success("✅ All parameters normal")
-
-# ---------------- Graphs: Last 10 readings ----------------
-st.subheader("Parameter Graphs (Last 10 readings)")
-last10 = df.tail(10)
-
-for param in ['temperature','humidity','weight','heart_rate']:
-    fig = px.line(last10, x='timestamp', y=param, title=param.capitalize(), markers=True)
-    # Highlight alerts
-    alert_mask = last10['alerts'].apply(lambda x: param in x)
-    if alert_mask.any():
-        fig.add_scatter(
-            x=last10['timestamp'][alert_mask],
-            y=last10[param][alert_mask],
-            mode='markers',
-            marker=dict(color='red', size=12),
-            name='Alert'
-        )
-    st.plotly_chart(fig, use_container_width=True)
-
-# ---------------- Auto-refresh ----------------
-st.markdown(f"App auto-refreshes every {REFRESH_SECONDS} seconds.")
-time.sleep(REFRESH_SECONDS)
-st.experimental_rerun()
+        return pd.Dat
 
 
 
