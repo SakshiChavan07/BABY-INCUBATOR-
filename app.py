@@ -2,12 +2,12 @@ import pandas as pd
 import numpy as np
 import streamlit as st
 import plotly.express as px
-import time
 from sklearn.linear_model import LinearRegression
+import time
 import os
 
 # ---------------- FILE SETTINGS ----------------
-ANALYSIS_FILE = "neonatal_incubator_with_actions.xlsx"
+HISTORICAL_FILE = "neonatal_incubator_with_actions.xlsx"
 LIVE_FILE = "neonatal_incubator_data.xlsx"
 SIMULATION_INTERVAL = 60  # seconds for live simulation
 
@@ -15,9 +15,18 @@ SIMULATION_INTERVAL = 60  # seconds for live simulation
 TEMP_LOW, TEMP_HIGH = 36.5, 37.2
 HUM_LOW, HUM_HIGH = 50, 65
 HR_LOW, HR_HIGH = 120, 160
-WEIGHT_LOW, WEIGHT_HIGH = 2.5, 4.0  # typical neonatal weight range
 
 st.title("🍼 Neonatal Baby Incubator Dashboard")
+
+# ---------------- LOAD DATA ----------------
+def load_excel(file):
+    if not os.path.exists(file):
+        st.error(f"Data file not found: {file}")
+        return None
+    df = pd.read_excel(file, engine="openpyxl")
+    df['timestamp'] = pd.to_datetime(df['timestamp'])
+    df = df.sort_values('timestamp').reset_index(drop=True)
+    return df
 
 # ---------------- ALERT FUNCTION ----------------
 def check_alert(row):
@@ -28,28 +37,109 @@ def check_alert(row):
         alerts.append("Humidity")
     if row['heart_rate'] < HR_LOW or row['heart_rate'] > HR_HIGH:
         alerts.append("Heart Rate")
-    if row['weight'] < WEIGHT_LOW or row['weight'] > WEIGHT_HIGH:
-        alerts.append("Weight")
     return alerts
 
-# ---------------- LOAD DATA ----------------
-def load_excel(file):
-    if not os.path.exists(file):
-        st.error(f"Data file not found: {file}")
-        return None
-    xls = pd.ExcelFile(file)
-    sheet = xls.sheet_names[0]
-    df = pd.read_excel(xls, sheet_name=sheet, engine="openpyxl")
-    df['timestamp'] = pd.to_datetime(df['timestamp'])
-    df = df.sort_values('timestamp').reset_index(drop=True)
-    return df
-
-# ---------------- HISTORICAL ANALYSIS ----------------
-st.sidebar.subheader("Mode Selection")
+# ---------------- MODE SELECTION ----------------
 mode = st.sidebar.radio("Select Mode:", ["Historical Analysis", "Live / Simulation"])
 
+# ---------------- HISTORICAL ANALYSIS ----------------
 if mode == "Historical Analysis":
-    df_analysis = load_excel(ANALYSIS_FILE)
+    st.subheader("📊 Historical Data Analysis")
+    df = load_excel(HISTORICAL_FILE)
+    if df is not None:
+        df['alerts'] = df.apply(check_alert, axis=1)
+        df['alerts_text'] = df['alerts'].apply(lambda x: ", ".join(x) if x else "Normal ✅")
+
+        # Interactive charts
+        for param in ['temperature','humidity','weight','heart_rate']:
+            fig = px.line(df, x='timestamp', y=param, title=f"{param.capitalize()} Trend")
+            alerts_df = df[df['alerts'].apply(lambda x: param in x)]
+            if not alerts_df.empty:
+                fig.add_scatter(x=alerts_df['timestamp'], y=alerts_df[param],
+                                mode='markers', marker=dict(color='red', size=10),
+                                name='Alert')
+            st.plotly_chart(fig, use_container_width=True)
+
+        # Latest alerts
+        latest = df.iloc[-1]
+        if latest['alerts']:
+            st.warning(f"⚠ Emergency Alert: {', '.join(latest['alerts'])} at {latest['timestamp']}")
+        else:
+            st.success("✅ All parameters normal")
+
+        # Optional: weight growth prediction
+        df['time_idx'] = np.arange(len(df))
+        X = df[['time_idx']]
+        y = df['weight']
+        model = LinearRegression()
+        model.fit(X, y)
+        future_idx = np.arange(len(df), len(df)+3).reshape(-1,1)
+        pred_weight = model.predict(future_idx)
+        st.subheader("📈 Predicted Weight for Next 3 Time Points")
+        st.write(pred_weight)
+
+# ---------------- LIVE / SIMULATION ----------------
+elif mode == "Live / Simulation":
+    st.subheader("⏱ Live Data / Simulation")
+    df_live = load_excel(LIVE_FILE)
+    if df_live is None:
+        df_live = pd.DataFrame(columns=['timestamp','temperature','humidity','weight','heart_rate','alerts'])
+
+    live_slot = st.empty()
+    chart_slots = {param: st.empty() for param in ['temperature','humidity','weight','heart_rate']}
+
+    def add_new_row(temp, hum, weight, hr):
+        new_time = pd.Timestamp.now()
+        row_series = pd.Series({"temperature": temp, "humidity": hum, "weight": weight, "heart_rate": hr})
+        alerts = check_alert(row_series)
+        new_row = pd.DataFrame([{
+            "timestamp": new_time,
+            "temperature": temp,
+            "humidity": hum,
+            "weight": weight,
+            "heart_rate": hr,
+            "alerts": alerts
+        }])
+        return new_row
+
+    st.info("Simulating live data. App refreshes every minute automatically.")
+
+    for i in range(3):  # simulate 3 live readings
+        if df_live.empty:
+            last_weight = 3.0
+        else:
+            last_weight = df_live.iloc[-1]['weight']
+
+        temp = np.random.uniform(36.2, 37.5)
+        hum = np.random.uniform(48, 67)
+        weight = last_weight + np.random.uniform(0, 0.02)
+        hr = np.random.randint(115, 165)
+
+        new_df = add_new_row(temp, hum, weight, hr)
+        df_live = pd.concat([df_live, new_df], ignore_index=True)
+
+        # Update interactive charts
+        for param in ['temperature','humidity','weight','heart_rate']:
+            fig = px.line(df_live, x='timestamp', y=param, title=f"{param.capitalize()} Trend")
+            alerts_df = df_live[df_live['alerts'].apply(lambda x: param in x)]
+            if not alerts_df.empty:
+                fig.add_scatter(x=alerts_df['timestamp'], y=alerts_df[param],
+                                mode='markers', marker=dict(color='red', size=10),
+                                name='Alert')
+            chart_slots[param].plotly_chart(fig, use_container_width=True)
+
+        # Show latest 5 readings
+        df_live['alerts_text'] = df_live['alerts'].apply(lambda x: ", ".join(x) if x else "Normal ✅")
+        live_slot.dataframe(df_live.tail(5))
+
+        # Emergency alert
+        latest = df_live.iloc[-1]
+        if latest['alerts']:
+            st.warning(f"⚠ Emergency Alert: {', '.join(latest['alerts'])} at {latest['timestamp']}")
+        else:
+            st.success("✅ All parameters normal")
+
+        time.sleep(SIMULATION_INTERVAL)
 
 
 
