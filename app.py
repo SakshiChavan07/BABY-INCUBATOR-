@@ -49,7 +49,8 @@ st.sidebar.subheader("Mode Selection")
 mode = st.sidebar.radio("Select Mode:", ["Historical Analysis", "Live / Simulation"])
 
 if mode == "Historical Analysis":
-    df_analysis = load_excel(ANALYSIS)
+    df_analysis = load_excel(ANALYSIS_FILE)
+
 
 
 """
