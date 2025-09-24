@@ -1,9 +1,10 @@
+
 pandas
 numpy
 matplotlib
 scikit-learn
 streamlit
 pyserial
-
+openpyxl
 
 
