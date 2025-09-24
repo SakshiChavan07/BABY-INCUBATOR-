@@ -1,44 +1,25 @@
-# app.py
+# neonatal_dashboard.py
 import streamlit as st
 import pandas as pd
 import numpy as np
-import plotly.graph_objects as go
+import plotly.express as px
 from datetime import timedelta
 import os
 import time
 
+# Page config
 st.set_page_config(page_title="🍼 Neonatal Incubator Dashboard", layout="wide")
 
-# ----- Settings -----
-HISTORICAL_EXCEL = "neonatal_incubator_with_actions.xlsx"
-LIVE_CSV = "neonatal_incubator_data.csv"
-REFRESH_SECONDS = 120  # 2 minutes refresh
+# ---------------- Settings ----------------
+HISTORICAL_FILE = "neonatal_incubator_with_actions.xlsx"
+LIVE_FILE = "neonatal_incubator_data.csv"
+REFRESH_SECONDS = 120  # 2 minutes
 TEMP_LOW, TEMP_HIGH = 36.5, 37.2
 HUM_LOW, HUM_HIGH = 50, 65
 HR_LOW, HR_HIGH = 120, 160
 
-# ----- Load data -----
-def load_data(file, is_csv=True):
-    if is_csv and os.path.exists(file):
-        df = pd.read_csv(file)
-    elif os.path.exists(file):
-        xls = pd.ExcelFile(file, engine='openpyxl')
-        sheet = xls.sheet_names[0]
-        df = pd.read_excel(xls, sheet_name=sheet, engine='openpyxl')
-    else:
-        return pd.DataFrame()
-    
-    if 'timestamp' in df.columns:
-        df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
-    else:
-        df['timestamp'] = pd.Timestamp.now()
-    for col in ['fan_status','heater_status','alarm_status']:
-        if col not in df.columns:
-            df[col] = 0
-    return df.sort_values('timestamp').reset_index(drop=True)
-
-# ----- Alert check -----
-def check_alerts(row):
+# ---------------- Helper Functions ----------------
+def check_alert(row):
     alerts = []
     if row['temperature'] < TEMP_LOW or row['temperature'] > TEMP_HIGH:
         alerts.append("Temperature")
@@ -48,24 +29,42 @@ def check_alerts(row):
         alerts.append("Heart Rate")
     return alerts
 
-# ----- Sidebar -----
-st.sidebar.subheader("Mode Selection")
-mode = st.sidebar.radio("Choose Mode:", ["Historical", "Live"])
+def load_excel(file):
+    if not os.path.exists(file):
+        st.warning(f"File not found: {file}")
+        return pd.DataFrame()
+    df = pd.read_excel(file, engine="openpyxl")
+    df['timestamp'] = pd.to_datetime(df['timestamp'])
+    df = df.sort_values('timestamp').reset_index(drop=True)
+    df['alerts'] = df.apply(check_alert, axis=1)
+    return df
 
-# ----- Load data based on mode -----
-if mode == "Historical":
-    df = load_data(HISTORICAL_EXCEL, is_csv=False)
+def load_csv(file):
+    if not os.path.exists(file):
+        st.warning(f"Live CSV not found: {file}")
+        return pd.DataFrame()
+    df = pd.read_csv(file)
+    df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
+    df = df.sort_values('timestamp').reset_index(drop=True)
+    df['alerts'] = df.apply(check_alert, axis=1)
+    return df
+
+# ---------------- Mode Selection ----------------
+mode = st.sidebar.radio("Select Mode:", ["Historical Analysis", "Live / Simulation"])
+
+# ---------------- Load Data ----------------
+if mode == "Historical Analysis":
+    st.subheader("📊 Historical Data")
+    df = load_excel(HISTORICAL_FILE)
 else:
-    df = load_data(LIVE_CSV, is_csv=True)
+    st.subheader("⏱ Live Data / Simulation")
+    df = load_csv(LIVE_FILE)
 
 if df.empty:
     st.warning("No data available.")
     st.stop()
 
-# Compute alerts
-df['alerts'] = df.apply(check_alerts, axis=1)
-
-# ----- Latest readings -----
+# ---------------- Latest Reading ----------------
 latest = df.iloc[-1]
 st.subheader("Latest Reading")
 st.markdown(f"**Temperature:** {latest.temperature:.2f} °C")
@@ -73,34 +72,35 @@ st.markdown(f"**Humidity:** {latest.humidity:.1f} %")
 st.markdown(f"**Weight:** {latest.weight:.3f} kg")
 st.markdown(f"**Heart Rate:** {int(latest.heart_rate)} bpm")
 
-# Alert message
+# Emergency alert
 if latest['alerts']:
-    st.markdown(f"⚠ **Emergency Alert:** {', '.join(latest['alerts'])}", unsafe_allow_html=True)
+    st.markdown(f"<p style='color:red; font-weight:bold;'>⚠ Emergency Alert: {', '.join(latest['alerts'])}</p>", unsafe_allow_html=True)
 else:
-    st.markdown("✅ All parameters normal")
+    st.success("✅ All parameters normal")
 
-# ----- Interactive graphs (last 10 readings) -----
+# ---------------- Graphs: Last 10 readings ----------------
 st.subheader("Parameter Graphs (Last 10 readings)")
 last10 = df.tail(10)
 
-def plot_param(param, y_label):
-    fig = go.Figure()
-    colors = ['red' if param in alerts else 'green' for alerts in last10['alerts']]
-    fig.add_trace(go.Scatter(
-        x=last10['timestamp'],
-        y=last10[param],
-        mode='lines+markers',
-        marker=dict(color=colors, size=10),
-        line=dict(color='blue'),
-        name=param
-    ))
-    fig.update_layout(
-        xaxis_title="Time",
-        yaxis_title=y_label,
-        margin=dict(l=20,r=20,t=30,b=20),
-        height=300
-    )
-    st.plotl
+for param in ['temperature','humidity','weight','heart_rate']:
+    fig = px.line(last10, x='timestamp', y=param, title=param.capitalize(), markers=True)
+    # Highlight alerts
+    alert_mask = last10['alerts'].apply(lambda x: param in x)
+    if alert_mask.any():
+        fig.add_scatter(
+            x=last10['timestamp'][alert_mask],
+            y=last10[param][alert_mask],
+            mode='markers',
+            marker=dict(color='red', size=12),
+            name='Alert'
+        )
+    st.plotly_chart(fig, use_container_width=True)
+
+# ---------------- Auto-refresh ----------------
+st.markdown(f"App auto-refreshes every {REFRESH_SECONDS} seconds.")
+time.sleep(REFRESH_SECONDS)
+st.experimental_rerun()
+
 
 
 """
